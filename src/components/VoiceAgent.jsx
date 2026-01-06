@@ -230,7 +230,30 @@ export default function VoiceAgent({ script, systemPrompt, onComplete }) {
                 voiceId: 'alloy'
             },
             firstMessage: script,
-            fillerInjectionEnabled: false // Disable filler words like "just a sec"
+            assistant: {
+                transcriber: {
+                    provider: "deepgram",
+                    model: "nova-2",
+                    language: "en-US"
+                },
+                model: {
+                    provider: "openai",
+                    model: "gpt-4o-mini",
+                    messages: [
+                        {
+                            role: "system",
+                            content: systemPrompt
+                        }
+                    ]
+                },
+                voice: {
+                    provider: "openai",
+                    voiceId: "alloy"
+                },
+                firstMessage: script,
+                backgroundSound: "off",
+                fillerInjectionEnabled: false
+            }
         };
 
         // #region agent log
