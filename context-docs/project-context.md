@@ -1,0 +1,8 @@
+**Context** Edutechplus operates in B2G edtech with pre-built math content (videos, applets, slides) designed for teacher-controlled classroom delivery on TV screens to grades 3-6. Standardized flow assumes low teacher capability.
+
+**Objective** Shift same assets into B2C student-facing mobile app. Remove teacher dependency. Maintain existing learning journey structure while adding engagement layer to compensate for loss of human facilitation.
+
+**Approach** Insert voice AI agent modules between content assets in fixed learning journey sequence. Voice agent initiates 10-30 second conversation with student, performs lightweight comprehension check tied to previous content (video/applet), then triggers tool call to open next asset (video or applet). Post-asset completion, voice agent re-engages to acknowledge what student just consumed, provides brief contextual reinforcement, then hands off to next content piece. Voice acts as connective tissue between assets \- engagement primary, comprehension check secondary. The goal of the voice agent is to provide delight in engagement, to students of grades 3, 4, 5, 6.
+
+**Why This Might Work** Voice creates continuity illusion mimicking teacher presence. Contextual callbacks to prior content signal attentiveness and personalization without requiring adaptive learning logic. Comprehension checks double as engagement reset points, preventing passive consumption drift. Tool calling automates asset sequencing, eliminating navigation friction. Low complexity—voice modules slot between existing assets without restructuring content or requiring branching logic.
+
