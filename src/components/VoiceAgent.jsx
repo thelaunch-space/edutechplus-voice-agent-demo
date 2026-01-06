@@ -229,31 +229,7 @@ export default function VoiceAgent({ script, systemPrompt, onComplete }) {
                 provider: 'openai',
                 voiceId: 'alloy'
             },
-            firstMessage: script,
-            assistant: {
-                transcriber: {
-                    provider: "deepgram",
-                    model: "nova-2",
-                    language: "en-US"
-                },
-                model: {
-                    provider: "openai",
-                    model: "gpt-4o-mini",
-                    messages: [
-                        {
-                            role: "system",
-                            content: systemPrompt
-                        }
-                    ]
-                },
-                voice: {
-                    provider: "openai",
-                    voiceId: "alloy"
-                },
-                firstMessage: script,
-                backgroundSound: "off",
-                fillerInjectionEnabled: false
-            }
+            firstMessage: script
         };
 
         // #region agent log
