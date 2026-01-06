@@ -11,6 +11,7 @@ export default function VoiceAgent({ script, systemPrompt, onComplete }) {
     const onCompleteRef = useRef(onComplete);
     const initializingRef = useRef(false);
     const stopPromiseRef = useRef(Promise.resolve());
+    const waitingForSpeechEndRef = useRef(false);
 
     // Update onComplete ref when it changes
     useEffect(() => {
@@ -96,6 +97,7 @@ export default function VoiceAgent({ script, systemPrompt, onComplete }) {
             const vapi = new Vapi(publicKey);
             vapiRef.current = vapi;
             completedRef.current = false;
+            waitingForSpeechEndRef.current = false;
 
         // #region agent log
             debugIngest(
@@ -107,31 +109,47 @@ export default function VoiceAgent({ script, systemPrompt, onComplete }) {
             );
         // #endregion
 
-        const handleComplete = () => {
+        const finishInteraction = () => {
             if (completedRef.current) return;
             completedRef.current = true;
 
-            console.log('Voice interaction complete');
+            console.log('Voice interaction complete - stopping Vapi');
             setStatus('completed');
 
-            // Wait 2.5s before killing the Vapi connection to allow the full audio to play
-            // because Vapi cuts off the audio stream immediately when stopped
+            // Clear timeout
+            if (timeoutRef.current) {
+                clearTimeout(timeoutRef.current);
+            }
+
+            // Stop Vapi (async) and avoid overlapping instances.
+            if (vapiRef.current) {
+                stopPromiseRef.current = vapiRef.current.stop().catch(() => {});
+            }
+
+            // Trigger completion callback using ref to avoid dependency issues
+            // Wait a small amount of time to ensure Vapi cleanup has started
             setTimeout(() => {
-                // Stop Vapi (async) and avoid overlapping instances.
-                if (vapiRef.current) {
-                    stopPromiseRef.current = vapiRef.current.stop().catch(() => {});
-                }
-
-                // Clear timeout
-                if (timeoutRef.current) {
-                    clearTimeout(timeoutRef.current);
-                }
-
-                // Trigger completion callback using ref to avoid dependency issues
                 Promise.resolve(stopPromiseRef.current).finally(() => {
+                    console.log('Vapi cleanup finished - calling onComplete');
                     onCompleteRef.current();
                 });
-            }, 2500);
+            }, 100);
+        };
+
+        const handleToolCall = () => {
+            if (completedRef.current || waitingForSpeechEndRef.current) return;
+            
+            console.log('Tool call received - waiting for speech to end');
+            waitingForSpeechEndRef.current = true;
+            // We don't call finishInteraction() yet.
+            // We wait for the 'speech-end' event.
+            // But we set a failsafe timeout in case speech-end never fires.
+            setTimeout(() => {
+                if (!completedRef.current) {
+                    console.warn('Speech end timeout - forcing completion');
+                    finishInteraction();
+                }
+            }, 5000); // 5s failsafe
         };
 
         // Listen for function call from assistant
@@ -160,6 +178,14 @@ export default function VoiceAgent({ script, systemPrompt, onComplete }) {
         });
         // #endregion
 
+        vapi.on('speech-end', () => {
+            console.log('Speech ended');
+            if (waitingForSpeechEndRef.current) {
+                console.log('Speech ended while waiting - finishing interaction');
+                finishInteraction();
+            }
+        });
+
         vapi.on('message', (message) => {
             console.log('Vapi message:', message);
             // #region agent log
@@ -187,7 +213,7 @@ export default function VoiceAgent({ script, systemPrompt, onComplete }) {
                     // #region agent log
                     debugIngest('VoiceAgent.jsx:83', 'completeInteraction function called', {}, 'run1', 'A');
                     // #endregion
-                    handleComplete();
+                    handleToolCall();
                 }
             }
             // Backward compatibility: also check for 'function-call' format
@@ -195,7 +221,7 @@ export default function VoiceAgent({ script, systemPrompt, onComplete }) {
                 // #region agent log
                 debugIngest('VoiceAgent.jsx:83', 'completeInteraction function called (legacy format)', {}, 'run1', 'A');
                 // #endregion
-                handleComplete();
+                handleToolCall();
             }
         });
 
@@ -232,14 +258,14 @@ export default function VoiceAgent({ script, systemPrompt, onComplete }) {
         });
         // #endregion
 
-        // Safety timeout: Force completion after 30 seconds
+        // Safety timeout: Force completion after 45 seconds (increased from 30)
         timeoutRef.current = setTimeout(() => {
             console.warn('Voice interaction timeout - forcing completion');
             // #region agent log
-            debugIngest('VoiceAgent.jsx:145', '30 second timeout triggered', { elapsed: 30000 }, 'run1', 'A');
+            debugIngest('VoiceAgent.jsx:145', '45 second timeout triggered', { elapsed: 45000 }, 'run1', 'A');
             // #endregion
-            handleComplete();
-        }, 30000);
+            finishInteraction();
+        }, 45000);
 
         // Start the call
         const vapiConfig = {
@@ -286,7 +312,7 @@ export default function VoiceAgent({ script, systemPrompt, onComplete }) {
                 debugIngest('VoiceAgent.jsx:135', 'Vapi start failed', { error: err?.message || String(err) }, 'run1', 'C');
                 // #endregion
                 setStatus('error');
-                handleComplete();
+                finishInteraction();
             });
         })();
 
