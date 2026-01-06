@@ -114,22 +114,24 @@ export default function VoiceAgent({ script, systemPrompt, onComplete }) {
             console.log('Voice interaction complete');
             setStatus('completed');
 
-            // Stop Vapi (async) and avoid overlapping instances.
-            if (vapiRef.current) {
-                stopPromiseRef.current = vapiRef.current.stop().catch(() => {});
-            }
-
-            // Clear timeout
-            if (timeoutRef.current) {
-                clearTimeout(timeoutRef.current);
-            }
-
-            // Trigger completion callback using ref to avoid dependency issues
+            // Wait 2.5s before killing the Vapi connection to allow the full audio to play
+            // because Vapi cuts off the audio stream immediately when stopped
             setTimeout(() => {
+                // Stop Vapi (async) and avoid overlapping instances.
+                if (vapiRef.current) {
+                    stopPromiseRef.current = vapiRef.current.stop().catch(() => {});
+                }
+
+                // Clear timeout
+                if (timeoutRef.current) {
+                    clearTimeout(timeoutRef.current);
+                }
+
+                // Trigger completion callback using ref to avoid dependency issues
                 Promise.resolve(stopPromiseRef.current).finally(() => {
                     onCompleteRef.current();
                 });
-            }, 500);
+            }, 2500);
         };
 
         // Listen for function call from assistant
