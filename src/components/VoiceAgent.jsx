@@ -1,16 +1,14 @@
 // VoiceAgent.jsx
 // Purpose: Runs a single Vapi voice interaction step and signals completion back to the JourneyManager.
 import { useEffect, useRef, useState } from 'react';
-import Vapi from '@vapi-ai/web';
+import { getVapi } from '../vapi/vapi';
 
 export default function VoiceAgent({ script, systemPrompt, onComplete }) {
-    const vapiRef = useRef(null);
     const timeoutRef = useRef(null);
     const [status, setStatus] = useState('initializing');
+    const [isConnecting, setIsConnecting] = useState(true);
     const completedRef = useRef(false);
     const onCompleteRef = useRef(onComplete);
-    const initializingRef = useRef(false);
-    const stopPromiseRef = useRef(Promise.resolve());
     const waitingForSpeechEndRef = useRef(false);
 
     // Update onComplete ref when it changes
@@ -38,22 +36,21 @@ export default function VoiceAgent({ script, systemPrompt, onComplete }) {
             }).catch(() => {});
         };
 
-        const publicKey = import.meta.env.VITE_VAPI_PUBLIC_KEY;
+        const vapi = getVapi();
 
-        if (!publicKey || publicKey === 'your_vapi_public_key_here') {
-            console.error('VAPI_PUBLIC_KEY not configured in .env');
+        if (!vapi) {
+            console.error('Failed to get Vapi instance');
             setStatus('error');
+            setIsConnecting(false);
             return;
         }
 
-        // Prevent multiple initializations
-        if (initializingRef.current) {
-            return;
-        }
-        initializingRef.current = true;
+        completedRef.current = false;
+        waitingForSpeechEndRef.current = false;
+        setIsConnecting(true);
 
         // #region agent log
-        debugIngest('VoiceAgent.jsx:19', 'Vapi initialization starting', { hasPublicKey: !!publicKey }, 'run1', 'A');
+        debugIngest('VoiceAgent.jsx:19', 'Vapi initialization starting', {}, 'run1', 'A');
         // #endregion
 
         // Check microphone permissions (Hypothesis D)
@@ -66,47 +63,6 @@ export default function VoiceAgent({ script, systemPrompt, onComplete }) {
             .catch((err) => {
                 debugIngest('VoiceAgent.jsx:29', 'Microphone permission denied', { error: err.message }, 'run1', 'D');
             });
-        // #endregion
-
-        let cancelled = false;
-
-        // StrictMode/HMR can remount quickly. Ensure any prior call teardown finishes
-        // before creating a new Daily call object (prevents "Duplicate DailyIframe instances").
-        (async () => {
-            try {
-                await stopPromiseRef.current;
-            } catch {
-                // Ignore stop errors; we just want to avoid overlapping instances.
-            }
-            if (cancelled) return;
-
-            // Clean up any existing instance first (best-effort)
-            if (vapiRef.current) {
-                try {
-                    stopPromiseRef.current = vapiRef.current.stop().catch(() => {});
-                    await stopPromiseRef.current;
-                } catch {
-                    // Ignore errors during cleanup
-                }
-                vapiRef.current = null;
-            }
-
-            // Initialize Vapi.
-            // NOTE: The Vapi constructor in @vapi-ai/web expects the public key string only.
-            // Passing an options object here can break internal URL construction (e.g. "/[object Object]/call/web").
-            const vapi = new Vapi(publicKey);
-            vapiRef.current = vapi;
-            completedRef.current = false;
-            waitingForSpeechEndRef.current = false;
-
-        // #region agent log
-            debugIngest(
-                'VoiceAgent.jsx:35',
-                'Vapi instance created',
-                { availableMethods: Object.keys(vapi).filter((k) => typeof vapi[k] === 'function') },
-                'run1',
-                'E'
-            );
         // #endregion
 
         const finishInteraction = () => {
@@ -122,17 +78,13 @@ export default function VoiceAgent({ script, systemPrompt, onComplete }) {
             }
 
             // Stop Vapi (async) and avoid overlapping instances.
-            if (vapiRef.current) {
-                stopPromiseRef.current = vapiRef.current.stop().catch(() => {});
-            }
+            vapi.stop().catch(() => {});
 
             // Trigger completion callback using ref to avoid dependency issues
             // Wait a small amount of time to ensure Vapi cleanup has started
             setTimeout(() => {
-                Promise.resolve(stopPromiseRef.current).finally(() => {
-                    console.log('Vapi cleanup finished - calling onComplete');
-                    onCompleteRef.current();
-                });
+                console.log('Vapi cleanup finished - calling onComplete');
+                onCompleteRef.current();
             }, 100);
         };
 
@@ -153,40 +105,31 @@ export default function VoiceAgent({ script, systemPrompt, onComplete }) {
         };
 
         // Listen for function call from assistant
-        vapi.on('call-start', () => {
+        const onCallStart = () => {
             console.log('Call started');
             // #region agent log
             debugIngest('VoiceAgent.jsx:55', 'call-start event fired', {}, 'run1', 'A');
             // #endregion
+            setIsConnecting(false);
             setStatus('listening');
-        });
+        };
 
-        vapi.on('call-end', () => {
+        const onCallEnd = () => {
             console.log('Call ended');
             // #region agent log
             debugIngest('VoiceAgent.jsx:61', 'call-end event fired', {}, 'run1', 'A');
             // #endregion
-        });
+        };
 
-        // #region agent log
-        // Log all possible user speech events (Hypothesis A, B)
-        const userSpeechEvents = ['user-speech-start', 'user-speech-end', 'transcription', 'user-message', 'utterance', 'user-transcription', 'speech-start', 'speech-end', 'audio-input', 'audio-input-start', 'audio-input-end'];
-        userSpeechEvents.forEach(eventName => {
-            vapi.on(eventName, (data) => {
-                debugIngest('VoiceAgent.jsx:68', `User speech event: ${eventName}`, { eventName, data: JSON.stringify(data) }, 'run1', 'A');
-            });
-        });
-        // #endregion
-
-        vapi.on('speech-end', () => {
+        const onSpeechEnd = () => {
             console.log('Speech ended');
             if (waitingForSpeechEndRef.current) {
                 console.log('Speech ended while waiting - finishing interaction');
                 finishInteraction();
             }
-        });
+        };
 
-        vapi.on('message', (message) => {
+        const onMessage = (message) => {
             console.log('Vapi message:', message);
             // #region agent log
             debugIngest(
@@ -223,9 +166,9 @@ export default function VoiceAgent({ script, systemPrompt, onComplete }) {
                 // #endregion
                 handleToolCall();
             }
-        });
+        };
 
-        vapi.on('error', (error) => {
+        const onError = (error) => {
             console.error('Vapi error:', error);
             // #region agent log
             debugIngest(
@@ -241,24 +184,17 @@ export default function VoiceAgent({ script, systemPrompt, onComplete }) {
             );
             // #endregion
             setStatus('error');
-        });
+            setIsConnecting(false);
+        };
 
-        // #region agent log
-        // Listen to ALL events using a wildcard approach (Hypothesis E)
-        // Try to access all possible event names from Vapi instance
-        const allPossibleEvents = ['*', 'all', 'any'];
-        allPossibleEvents.forEach(eventName => {
-            try {
-                vapi.on(eventName, (data) => {
-                    debugIngest('VoiceAgent.jsx:100', `Wildcard event: ${eventName}`, { eventName, data: JSON.stringify(data) }, 'run1', 'E');
-                });
-            } catch (e) {
-                // Ignore if event doesn't exist
-            }
-        });
-        // #endregion
+        // Attach event listeners
+        vapi.on('call-start', onCallStart);
+        vapi.on('call-end', onCallEnd);
+        vapi.on('speech-end', onSpeechEnd);
+        vapi.on('message', onMessage);
+        vapi.on('error', onError);
 
-        // Safety timeout: Force completion after 45 seconds (increased from 30)
+        // Safety timeout: Force completion after 45 seconds
         timeoutRef.current = setTimeout(() => {
             console.warn('Voice interaction timeout - forcing completion');
             // #region agent log
@@ -293,7 +229,8 @@ export default function VoiceAgent({ script, systemPrompt, onComplete }) {
                 provider: 'openai',
                 voiceId: 'alloy'
             },
-            firstMessage: script
+            firstMessage: script,
+            fillerInjectionEnabled: false // Disable filler words like "just a sec"
         };
 
         // #region agent log
@@ -312,27 +249,65 @@ export default function VoiceAgent({ script, systemPrompt, onComplete }) {
                 debugIngest('VoiceAgent.jsx:135', 'Vapi start failed', { error: err?.message || String(err) }, 'run1', 'C');
                 // #endregion
                 setStatus('error');
+                setIsConnecting(false);
                 finishInteraction();
             });
-        })();
 
         return () => {
-            cancelled = true;
-            initializingRef.current = false;
             if (timeoutRef.current) {
                 clearTimeout(timeoutRef.current);
                 timeoutRef.current = null;
             }
-            if (vapiRef.current) {
-                try {
-                    stopPromiseRef.current = vapiRef.current.stop().catch(() => {});
-                } catch (e) {
-                    // Ignore errors during cleanup
-                }
-                vapiRef.current = null;
-            }
+            
+            // Remove event listeners
+            vapi.off('call-start', onCallStart);
+            vapi.off('call-end', onCallEnd);
+            vapi.off('speech-end', onSpeechEnd);
+            vapi.off('message', onMessage);
+            vapi.off('error', onError);
+            
+            vapi.stop().catch(() => {});
         };
     }, [script, systemPrompt]);
+
+    if (isConnecting) {
+        return (
+             <div style={{
+                width: '100%',
+                height: '100vh',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                color: 'white',
+                padding: '20px',
+                textAlign: 'center'
+            }}>
+                <div style={{
+                    width: '40px',
+                    height: '40px',
+                    borderRadius: '50%',
+                    border: '3px solid rgba(255, 255, 255, 0.3)',
+                    borderTopColor: 'white',
+                    animation: 'spin 1s ease-in-out infinite',
+                    marginBottom: '20px'
+                }} />
+                <h2 style={{
+                    fontSize: '20px',
+                    fontWeight: '500',
+                    opacity: 0.9
+                }}>
+                    Connecting to Math Mate...
+                </h2>
+                <style>{`
+                    @keyframes spin {
+                        to { transform: rotate(360deg); }
+                    }
+                `}</style>
+            </div>
+        );
+    }
 
     return (
         <div style={{
